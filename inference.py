@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import torch
-from torch import nn
+from torch import nn, ao
 from torch.ao.quantization import quantize_dynamic
 from tqdm import tqdm
 import openvino as ov
@@ -77,7 +77,7 @@ class Wav2LipInference:
 
     def __init__(self, args) -> None:
 
-        self.CHUNK = 5120  # piece of audio data, no of frames per buffer during audio capture, large chunk size reduces computational overhead but may add latency and vise versa
+        self.CHUNK = 1024  # piece of audio data, no of frames per buffer during audio capture, large chunk size reduces computational overhead but may add latency and vise versa
         self.FORMAT = pyaudio.paInt16
         self.CHANNELS = 1  # no of audio channels, 1 means monaural audio
         self.RATE = 16000  # sample rate of the audio stream, 16000 samples/second
@@ -85,14 +85,15 @@ class Wav2LipInference:
         self.mel_step_size = 16  # mel freq step size
         self.audio_fs = 16000  # Sample rate
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        # self.device = 'cpu'
         self.args = args
 
         print('Using {} for inference.'.format(self.device))
 
         self.model = self.load_model()
-        torch.backends.quantized.engine = 'qnnpack'
-
-        self.model.qconfig = torch.quantization.get_default_qconfig('qnnpack')
+        # torch.backends.quantized.engine = 'x86'
+        #
+        # self.model.qconfig = torch.quantization.get_default_qconfig('x86')
 
         # def fuse_model(model):
         #     for m in model.modules():
@@ -103,14 +104,20 @@ class Wav2LipInference:
         #                 #     torch.quantization.fuse_modules(m, [f'{idx}.conv_block.0', f'{idx}.conv_block.1',
         #                 #                                         f'{idx}.act'], inplace=True)
         #                 if isinstance(m[idx], Conv2dTranspose):
-        #                     m[idx].qconfig = None
-        #                 # torch.quantization.fuse_modules(m, [f'{idx}.conv_block.0', f'{idx}.conv_block.1',
-        #                 #                                     f'{idx}.act'], inplace=True)
-
+        #                     m[idx].qconfig = ao.quantization.qconfig.QConfig(
+        #                         activation=ao.quantization.observer.HistogramObserver.with_args(
+        #                             qscheme=torch.per_tensor_symmetric, dtype=torch.qint8,
+        #                         ),
+        #                         weight=ao.quantization.observer.MinMaxObserver.with_args(
+        #                             dtype=torch.qint8, qscheme=torch.per_tensor_symmetric))
+        #
+        # #                 # torch.quantization.fuse_modules(m, [f'{idx}.conv_block.0', f'{idx}.conv_block.1',
+        # #                 #                                     f'{idx}.act'], inplace=True)
+        #
         # fuse_model(self.model)
         # self.model.output_block.qconfig = None
-        self.model_prepared = torch.quantization.prepare(self.model)
-
+        # self.model_prepared = torch.quantization.prepare(self.model)
+        # self.model_quantized=None
         self.detector = self.load_batch_face_model()
 
         self.face_detect_cache_result = None
@@ -155,10 +162,10 @@ class Wav2LipInference:
 
     def load_model(self):
 
-        # if self.device=='cpu':
-        #     return self.load_wav2lip_openvino_model()
-        # else:
-        return self.load_wav2lip_model(self.args.checkpoint_path)
+        if self.device=='cpu':
+            return self.load_wav2lip_openvino_model()
+        else:
+            return self.load_wav2lip_model(self.args.checkpoint_path)
 
     def load_batch_face_model(self):
 
@@ -337,85 +344,86 @@ def update_frames(full_frames, stream, inference_pipline):
                                                                         np.ceil(float(len(mel_chunks)) / batch_size)))):
 
         if inference_pipline.device == 'cpu':
-            img_batch = torch.FloatTensor(np.transpose(img_batch, (0, 3, 1, 2))).to(inference_pipline.device)
-            mel_batch = torch.FloatTensor(np.transpose(mel_batch, (0, 3, 1, 2))).to(inference_pipline.device)
+            # img_batch = torch.FloatTensor(np.transpose(img_batch, (0, 3, 1, 2))).to(inference_pipline.device)
+            # mel_batch = torch.FloatTensor(np.transpose(mel_batch, (0, 3, 1, 2))).to(inference_pipline.device)
             # print(img_batch.shape, mel_batch.shape)
-            with torch.no_grad():
-                def calibrate(model, data_loader):
-                    model.eval()
-                    with torch.no_grad():
-                        for data in data_loader:
-                            model(data[0], data[1])
-
-                calibration_loader = [(mel_batch, img_batch)]
-                calibrate(inference_pipline.model_prepared, calibration_loader)
-
-                # 应用量化
-                model_quantized = torch.quantization.convert(inference_pipline.model_prepared)
-                img_batch, mel_batch = np.random.rand(128, 6, 96, 96), np.random.rand(128, 1, 80, 16)
-                img_batch = torch.FloatTensor(img_batch)
-                mel_batch = torch.FloatTensor(mel_batch)
-                torch.onnx.export(model_quantized,
-                                  (mel_batch, img_batch),
-                                  'model_quantized.onnx',
-                                  input_names=["audio_sequences", "face_sequences"],
-                                  output_names=["output"],
-                                  dynamic_axes={"audio_sequences": {0: "batch_size", 1: "time_size"},
-                                                "face_sequences": {0: "batch_size", 1: "channel"}},
-                                  )
-                # with profile(
-                #         activities=[
-                #             ProfilerActivity.CPU,
-                #         ],
-                #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
-                #         record_shapes=True,
-                #         profile_memory=True,
-                #         with_stack=False
-                # ) as prof:
-                #     for x in range(1):
-                #         # record_function
-                #         model_quantized(mel_batch, img_batch).numpy()
+            # with torch.no_grad():
+                # if inference_pipline.model_quantized is None:
+                #     def calibrate(model, data_loader):
+                #         model.eval()
+                #         with torch.no_grad():
+                #             for data in data_loader:
+                #                 model(data[0], data[1])
                 #
-                # print(prof.key_averages().table(sort_by="cpu_time_total"))
+                #     calibration_loader = [(mel_batch, img_batch)]
+                #     calibrate(inference_pipline.model_prepared, calibration_loader)
                 #
-                # with profile(
-                #         activities=[
-                #             ProfilerActivity.CPU,
-                #         ],
-                #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
-                #         record_shapes=True,
-                #         profile_memory=True,
-                #         with_stack=False
-                # ) as prof:
-                #     for x in range(1):
-                #         # record_function
-                #         inference_pipline.model(mel_batch, img_batch).numpy()
+                #     # 应用量化
+                #     model_quantized = torch.quantization.convert(inference_pipline.model_prepared)
+                # # img_batch, mel_batch = np.random.rand(128, 6, 96, 96), np.random.rand(128, 1, 80, 16)
+                # # img_batch = torch.FloatTensor(img_batch)
+                # # mel_batch = torch.FloatTensor(mel_batch)
+                # # torch.onnx.export(model_quantized,
+                # #                   (mel_batch, img_batch),
+                # #                   'model_quantized.onnx',
+                # #                   input_names=["audio_sequences", "face_sequences"],
+                # #                   output_names=["output"],
+                # #                   dynamic_axes={"audio_sequences": {0: "batch_size", 1: "time_size"},
+                # #                                 "face_sequences": {0: "batch_size", 1: "channel"}},
+                # #                   )
+                # # with profile(
+                # #         activities=[
+                # #             ProfilerActivity.CPU,
+                # #         ],
+                # #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                # #         record_shapes=True,
+                # #         profile_memory=True,
+                # #         with_stack=False
+                # # ) as prof:
+                # #     for x in range(1):
+                # #         # record_function
+                # #         model_quantized(mel_batch, img_batch).numpy()
+                # #
+                # # print(prof.key_averages().table(sort_by="cpu_time_total"))
+                # #
+                # # with profile(
+                # #         activities=[
+                # #             ProfilerActivity.CPU,
+                # #         ],
+                # #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                # #         record_shapes=True,
+                # #         profile_memory=True,
+                # #         with_stack=False
+                # # ) as prof:
+                # #     for x in range(1):
+                # #         # record_function
+                # #         inference_pipline.model(mel_batch, img_batch).numpy()
+                # # #
+                # # print(prof.key_averages().table(sort_by="cpu_time_total"))
+                # # start_time = time()
+                # # for _ in range(10):  # 运行多次以获得平均时间
+                # #     _ = inference_pipline.model(mel_batch, img_batch).numpy()
+                # # orig_time = (time() - start_time) / 10
+                # # print(f"Original model inference time: {orig_time:.6f} seconds")
                 #
-                # print(prof.key_averages().table(sort_by="cpu_time_total"))
-                # start_time = time()
-                # for _ in range(10):  # 运行多次以获得平均时间
-                #     _ = inference_pipline.model(mel_batch, img_batch).numpy()
-                # orig_time = (time() - start_time) / 10
-                # print(f"Original model inference time: {orig_time:.6f} seconds")
-
-                # # 测量量化模型的推理时间
-                # start_time = time()
-                # for _ in range(10):  # 运行多次以获得平均时间
-                #     _ =
-                # quant_time = (time() - start_time) / 10
-                # print(f"Quantized model inference time: {quant_time:.6f} seconds")
-
-                pred = inference_pipline.model(mel_batch, img_batch).numpy()
-            # img_batch = np.transpose(img_batch, (0, 3, 1, 2))
-            # mel_batch = np.transpose(mel_batch, (0, 3, 1, 2))
-            # print(img_batch.shape, mel_batch.shape)
-            # pred = inference_pipline.model([mel_batch, img_batch])['output']
+                # # # 测量量化模型的推理时间
+                # # start_time = time()
+                # # for _ in range(10):  # 运行多次以获得平均时间
+                # #     _ =
+                # # quant_time = (time() - start_time) / 10
+                # # print(f"Quantized model inference time: {quant_time:.6f} seconds")
+                #     inference_pipline.model_quantized = model_quantized
+                # pred = inference_pipline.model(mel_batch, img_batch).numpy()
+            img_batch = np.transpose(img_batch, (0, 3, 1, 2))
+            mel_batch = np.transpose(mel_batch, (0, 3, 1, 2))
+            print(img_batch.shape, mel_batch.shape)
+            pred = inference_pipline.model([mel_batch, img_batch])['output']
         else:
             img_batch = torch.FloatTensor(np.transpose(img_batch, (0, 3, 1, 2))).to(inference_pipline.device)
             mel_batch = torch.FloatTensor(np.transpose(mel_batch, (0, 3, 1, 2))).to(inference_pipline.device)
             print(img_batch.shape, mel_batch.shape)
             with torch.no_grad():
-                pred = inference_pipline.model(mel_batch, img_batch)
+                pred = inference_pipline.model(mel_batch, img_batch).cpu().numpy()
 
         print(pred.shape)
         pred = pred.transpose(0, 2, 3, 1) * 255.
