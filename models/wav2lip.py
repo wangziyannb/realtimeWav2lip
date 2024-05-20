@@ -117,7 +117,7 @@ class Wav2Lip(nn.Module):
                 raise e
 
             feats.pop()
-
+        # x= self.dequant(x)
         x = self.output_block(x)
 
         if input_dim_size > 4:
