@@ -39,8 +39,8 @@ def calculate_fid(mu1, sigma1, mu2, sigma2):
 
 def getFID(real_images, gen_images, model):
 
-    real_activations = get_activations(real_images, model, batch_size=1, cuda=False)
-    gen_activations = get_activations(gen_images, model, batch_size=1, cuda=False)
+    real_activations = get_activations(real_images, model, batch_size=1, cuda=True)
+    gen_activations = get_activations(gen_images, model, batch_size=1, cuda=True)
 
     mu_real = np.mean(real_activations, axis=0)
     sigma_real = np.cov(real_activations, rowvar=False)

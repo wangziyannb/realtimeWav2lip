@@ -26,10 +26,7 @@ class QuantizedWav2Lip(nn.Module):
 class Wav2Lip(nn.Module):
     def __init__(self):
         super(Wav2Lip, self).__init__()
-        self.quant_audio = torch.quantization.QuantStub()
-        self.quant_face = torch.quantization.QuantStub()
-        self.dequant_audio = torch.quantization.DeQuantStub()
-        self.dequant_face = torch.quantization.DeQuantStub()
+
         self.face_encoder_blocks = nn.ModuleList([
             nn.Sequential(Conv2d(6, 16, kernel_size=7, stride=1, padding=3)),  # 96,96
 
@@ -104,6 +101,12 @@ class Wav2Lip(nn.Module):
         self.output_block = nn.Sequential(Conv2d(80, 32, kernel_size=3, stride=1, padding=1),
                                           nn.Conv2d(32, 3, kernel_size=1, stride=1, padding=0),
                                           nn.Sigmoid())
+        self.quant_audio = torch.quantization.QuantStub()
+        self.quant_face = torch.quantization.QuantStub()
+        self.dequant_audio = torch.quantization.DeQuantStub()
+        self.dequant_face = nn.ModuleList()
+        for i in range(len(self.face_decoder_blocks)):
+            self.dequant_face.append(torch.quantization.DeQuantStub())
 
     def forward(self, audio_sequences, face_sequences):
         audio_sequences = self.quant_audio(audio_sequences)
@@ -127,7 +130,7 @@ class Wav2Lip(nn.Module):
         x = audio_embedding
         x = self.dequant_audio(x)
         for i in range(len(feats)):
-            feats[i] = self.dequant_face(feats[i])
+            feats[i] = self.dequant_face[i](feats[i])
         for f in self.face_decoder_blocks:
             x = f(x)
             try:

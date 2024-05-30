@@ -152,6 +152,8 @@ class Wav2LipInference:
         self.img_tk = None
         self.total_img_batch = []
         self.total_mel_batch = []
+        self.pred = []
+        self.pred_q = []
 
     def load_wav2lip_openvino_model(self):
         '''
@@ -413,21 +415,6 @@ class Wav2LipInference:
             yield img_batch, mel_batch, frame_batch, coords_batch
 
 
-def calculate_fid(act1, act2):
-    # calculate mean and covariance statistics
-    mu1, sigma1 = act1.mean(axis=0), cov(act1, rowvar=False)
-    mu2, sigma2 = act2.mean(axis=0), cov(act2, rowvar=False)
-    # calculate sum squared difference between means
-    ssdiff = numpy.sum((mu1 - mu2) ** 2.0)
-    # calculate sqrt of product between cov
-    covmean = sqrtm(sigma1.dot(sigma2))
-    # check and correct imaginary numbers from sqrt
-    if iscomplexobj(covmean):
-        covmean = covmean.real
-    # calculate score
-    fid = ssdiff + trace(sigma1 + sigma2 - 2.0 * covmean)
-    return fid
-
 
 def update_frames(full_frames, stream, inference_pipline):
     stime = time()
@@ -441,7 +428,6 @@ def update_frames(full_frames, stream, inference_pipline):
     batch_size = inference_pipline.args.wav2lip_batch_size
     gen = inference_pipline.datagen(full_frames.copy(), mel_chunks.copy())
 
-    s = time()
     pred_quant = None
     for i, (img_batch, mel_batch, frames, coords) in enumerate(tqdm(gen,
                                                                     total=int(
@@ -461,7 +447,6 @@ def update_frames(full_frames, stream, inference_pipline):
             mel_batch = torch.FloatTensor(np.transpose(mel_batch, (0, 3, 1, 2))).to(inference_pipline.device)
             inference_pipline.total_img_batch.append(img_batch)
             inference_pipline.total_mel_batch.append(mel_batch)
-            print(img_batch.shape, mel_batch.shape)
             with torch.no_grad():
                 if inference_pipline.model_quantized is None and len(inference_pipline.total_mel_batch) == 10:
                     def calibrate(model, data_loader):
@@ -602,13 +587,21 @@ def update_frames(full_frames, stream, inference_pipline):
             fin_time = (time() - start_time)
             print(f"GPU model inference time: {fin_time:.6f} seconds")
 
-        print(pred.shape)
         if pred_quant is not None:
             pred_quant = pred_quant.transpose(0, 2, 3, 1) * 255.
-        pred = pred.transpose(0, 2, 3, 1) * 255.
 
+        pred = pred.transpose(0, 2, 3, 1) * 255.
         if pred_quant is not None:
-            print(f"FID score:{getFID(pred, pred_quant, inference_pipline.FIDModel)}")
+            inference_pipline.pred.append(pred)
+            inference_pipline.pred_q.append(pred_quant)
+            if len(inference_pipline.pred_q) == 1000:
+                inference_pipline.pred = np.concatenate(inference_pipline.pred, axis=0)
+                inference_pipline.pred_q = np.concatenate(inference_pipline.pred_q, axis=0)
+                print(
+                    f"FID score:{getFID(inference_pipline.pred, inference_pipline.pred_q, inference_pipline.FIDModel)}")
+        # else:
+        #     print(f"FID score:{getFID(pred, pred, inference_pipline.FIDModel)}")
+        if pred_quant is not None:
             pred = pred_quant
         for p, f, c in zip(pred, frames, coords):
             y1, y2, x1, x2 = c
