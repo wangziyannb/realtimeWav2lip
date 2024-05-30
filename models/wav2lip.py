@@ -7,11 +7,29 @@ import math
 from .conv import Conv2dTranspose, Conv2d, nonorm_Conv2d
 
 
+class QuantizedWav2Lip(nn.Module):
+    def __init__(self, model_fp32):
+        super(QuantizedWav2Lip, self).__init__()
+        self.quant_a = torch.quantization.QuantStub()
+        self.quant_f = torch.quantization.QuantStub()
+        self.dequant = torch.quantization.DeQuantStub()
+        self.model_fp32 = model_fp32
+
+    def forward(self, audio_sequences, face_sequences):
+        audio_sequences = self.quant_a(audio_sequences)
+        face_sequences = self.quant_f(face_sequences)
+        x = self.model_fp32(audio_sequences, face_sequences)
+        x = self.dequant(x)
+        return x
+
+
 class Wav2Lip(nn.Module):
     def __init__(self):
         super(Wav2Lip, self).__init__()
-        self.quant = QuantStub()
-        self.dequant = DeQuantStub()
+        self.quant_audio = torch.quantization.QuantStub()
+        self.quant_face = torch.quantization.QuantStub()
+        self.dequant_audio = torch.quantization.DeQuantStub()
+        self.dequant_face = torch.quantization.DeQuantStub()
         self.face_encoder_blocks = nn.ModuleList([
             nn.Sequential(Conv2d(6, 16, kernel_size=7, stride=1, padding=3)),  # 96,96
 
@@ -88,9 +106,9 @@ class Wav2Lip(nn.Module):
                                           nn.Sigmoid())
 
     def forward(self, audio_sequences, face_sequences):
+        audio_sequences = self.quant_audio(audio_sequences)
+        face_sequences = self.quant_face(face_sequences)
         # audio_sequences = (B, T, 1, 80, 16)
-        audio_sequences = self.quant(audio_sequences)
-        face_sequences = self.quant(face_sequences)
         B = audio_sequences.size(0)
 
         input_dim_size = len(face_sequences.size())
@@ -107,6 +125,9 @@ class Wav2Lip(nn.Module):
             feats.append(x)
 
         x = audio_embedding
+        x = self.dequant_audio(x)
+        for i in range(len(feats)):
+            feats[i] = self.dequant_face(feats[i])
         for f in self.face_decoder_blocks:
             x = f(x)
             try:
@@ -117,7 +138,7 @@ class Wav2Lip(nn.Module):
                 raise e
 
             feats.pop()
-        # x= self.dequant(x)
+
         x = self.output_block(x)
 
         if input_dim_size > 4:
@@ -126,7 +147,6 @@ class Wav2Lip(nn.Module):
 
         else:
             outputs = x
-        outputs = self.dequant(outputs)
         return outputs
 
 

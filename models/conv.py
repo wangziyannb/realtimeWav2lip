@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from torch.ao.nn.quantized import QFunctional
+from torch.ao.nn.quantized import QFunctional, FloatFunctional
 from torch.ao.quantization import QuantStub, DeQuantStub
 from torch.nn import functional as F
 import torch.nn.quantized.functional as qF
@@ -26,7 +26,7 @@ class Conv2d(nn.Module):
             if x.is_quantized and out.is_quantized:
                 out = QFunctional().add(out, x)
             else:
-                out += x
+                out = FloatFunctional().add(out, x)
         x = self.act(out)
         # x = self.dequant(x)
         return x
