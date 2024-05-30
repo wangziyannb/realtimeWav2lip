@@ -37,7 +37,7 @@ def calculate_fid(mu1, sigma1, mu2, sigma2):
     fid = ssdiff + np.trace(sigma1 + sigma2 - 2.0 * covmean)
     return fid
 
-def getFID(real_images, gen_images, model):
+def getFID(real_images, gen_images, model, cuda=True):
 
     real_activations = get_activations(real_images, model, batch_size=1, cuda=True)
     gen_activations = get_activations(gen_images, model, batch_size=1, cuda=True)

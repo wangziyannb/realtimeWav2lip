@@ -415,7 +415,6 @@ class Wav2LipInference:
             yield img_batch, mel_batch, frame_batch, coords_batch
 
 
-
 def update_frames(full_frames, stream, inference_pipline):
     stime = time()
     # convert recording to mel chunks
@@ -472,35 +471,35 @@ def update_frames(full_frames, stream, inference_pipline):
 
                     print(f"Quantized model inference time: {fin_time:.6f} seconds")
                 elif inference_pipline.model_quantized is not None:
-                    # with profile(
-                    #         activities=[
-                    #             ProfilerActivity.CPU,
-                    #         ],
-                    #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
-                    #         record_shapes=True,
-                    #         profile_memory=True,
-                    #         with_stack=False
-                    # ) as prof:
-                    #     for x in range(1):
-                    #         # record_function
-                    #         inference_pipline.model_quantized(mel_batch, img_batch).numpy()
+                    with profile(
+                            activities=[
+                                ProfilerActivity.CPU,
+                            ],
+                            on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                            record_shapes=True,
+                            profile_memory=True,
+                            with_stack=False
+                    ) as prof:
+                        for x in range(1):
+                            # record_function
+                            inference_pipline.model_quantized(mel_batch, img_batch).numpy()
+
+                    print(prof.key_averages().table(sort_by="cpu_time_total"))
+
+                    with profile(
+                            activities=[
+                                ProfilerActivity.CPU,
+                            ],
+                            on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                            record_shapes=True,
+                            profile_memory=True,
+                            with_stack=False
+                    ) as prof:
+                        for x in range(1):
+                            # record_function
+                            inference_pipline.model(mel_batch, img_batch).numpy()
                     #
-                    # print(prof.key_averages().table(sort_by="cpu_time_total"))
-                    #
-                    # with profile(
-                    #         activities=[
-                    #             ProfilerActivity.CPU,
-                    #         ],
-                    #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
-                    #         record_shapes=True,
-                    #         profile_memory=True,
-                    #         with_stack=False
-                    # ) as prof:
-                    #     for x in range(1):
-                    #         # record_function
-                    #         inference_pipline.model(mel_batch, img_batch).numpy()
-                    # #
-                    # print(prof.key_averages().table(sort_by="cpu_time_total"))
+                    print(prof.key_averages().table(sort_by="cpu_time_total"))
                     start_time = time()
                     pred_quant = inference_pipline.model_quantized(mel_batch, img_batch).numpy()
                     fin_time = (time() - start_time)
@@ -594,11 +593,12 @@ def update_frames(full_frames, stream, inference_pipline):
         if pred_quant is not None:
             inference_pipline.pred.append(pred)
             inference_pipline.pred_q.append(pred_quant)
-            if len(inference_pipline.pred_q) == 1000:
+            if len(inference_pipline.pred_q) == 50:
                 inference_pipline.pred = np.concatenate(inference_pipline.pred, axis=0)
                 inference_pipline.pred_q = np.concatenate(inference_pipline.pred_q, axis=0)
                 print(
-                    f"FID score:{getFID(inference_pipline.pred, inference_pipline.pred_q, inference_pipline.FIDModel)}")
+                    f"FID score:{getFID(inference_pipline.pred, inference_pipline.pred_q, inference_pipline.FIDModel, 
+                                        cuda=inference_pipline.device != 'cpu')}")
         # else:
         #     print(f"FID score:{getFID(pred, pred, inference_pipline.FIDModel)}")
         if pred_quant is not None:
