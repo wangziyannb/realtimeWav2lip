@@ -78,7 +78,7 @@ class Wav2LipInference:
 
     def __init__(self, args) -> None:
 
-        self.CHUNK = 1024  # piece of audio data, no of frames per buffer during audio capture, large chunk size reduces computational overhead but may add latency and vise versa
+        self.CHUNK = 4096+2048+1024  # piece of audio data, no of frames per buffer during audio capture, large chunk size reduces computational overhead but may add latency and vise versa
         self.FORMAT = pyaudio.paInt16
         self.CHANNELS = 1  # no of audio channels, 1 means monaural audio
         self.RATE = 16000  # sample rate of the audio stream, 16000 samples/second
@@ -92,10 +92,12 @@ class Wav2LipInference:
         print('Using {} for inference.'.format(self.device))
 
         self.model = self.load_model()
-        torch.backends.quantized.engine = 'x86'
+        # torch.backends.quantized.engine = 'x86'
 
-        self.model.qconfig = torch.quantization.get_default_qconfig('x86')
+        # self.model.qconfig = torch.quantization.get_default_qconfig('x86')
+        torch.backends.quantized.engine = 'qnnpack'
 
+        self.model.qconfig = torch.quantization.get_default_qconfig('qnnpack')
         def fuse_model(model):
             for m in model.modules():
                 if isinstance(m, nn.Sequential):
@@ -113,23 +115,19 @@ class Wav2LipInference:
                                                                     ], inplace=True)
 
                             m[idx].qconfig = ao.quantization.qconfig.QConfig(
-                                # activation=ao.quantization.observer.HistogramObserver.with_args(
-                                #     qscheme=torch.per_tensor_symmetric, dtype=torch.qint8,
-                                # ),
-                                activation=default_fake_quant,
-                                weight=default_weight_fake_quant
-                                # weight=ao.quantization.observer.MinMaxObserver.with_args(
-                                #     dtype=torch.qint8, qscheme=torch.per_tensor_symmetric)
+                                activation=ao.quantization.observer.MinMaxObserver,
+                                # activation=default_fake_quant,
+                                # weight=default_weight_fake_quant
+                                weight=ao.quantization.observer.MinMaxObserver.with_args(
+                                    dtype=torch.torch.qint8, qscheme=torch.per_tensor_affine)
                             )
                         if isinstance(m[idx], Conv2dTranspose):
                             m[idx].qconfig = ao.quantization.qconfig.QConfig(
-                                # activation=ao.quantization.observer.HistogramObserver.with_args(
-                                #     qscheme=torch.per_tensor_symmetric, dtype=torch.qint8,
-                                # ),
-                                activation=default_fake_quant,
-                                weight=default_weight_fake_quant
-                                # weight=ao.quantization.observer.MinMaxObserver.with_args(
-                                #     dtype=torch.qint8, qscheme=torch.per_tensor_symmetric)
+                                activation=ao.quantization.observer.MinMaxObserver,
+                                # activation=default_fake_quant,
+                                # weight=default_weight_fake_quant
+                                weight=ao.quantization.observer.MinMaxObserver.with_args(
+                                    dtype=torch.torch.qint8, qscheme=torch.per_tensor_affine)
                             )
 
         #                 # torch.quantization.fuse_modules(m, [f'{idx}.conv_block.0', f'{idx}.conv_block.1',
@@ -382,7 +380,7 @@ def update_frames(full_frames, stream, inference_pipline):
             inference_pipline.total_mel_batch.append(mel_batch)
             print(img_batch.shape, mel_batch.shape)
             with torch.no_grad():
-                if inference_pipline.model_quantized is None and len(inference_pipline.total_mel_batch)==100:
+                if inference_pipline.model_quantized is None and len(inference_pipline.total_mel_batch)==1:
                     def calibrate(model, data_loader):
                         model.eval()
                         with torch.no_grad():
@@ -405,6 +403,35 @@ def update_frames(full_frames, stream, inference_pipline):
 
                     print(f"Quantized model inference time: {fin_time:.6f} seconds")
                 elif inference_pipline.model_quantized is not None:
+                    with profile(
+                            activities=[
+                                ProfilerActivity.CPU,
+                            ],
+                            on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                            record_shapes=True,
+                            profile_memory=True,
+                            with_stack=False
+                    ) as prof:
+                        for x in range(1):
+                            # record_function
+                            inference_pipline.model_quantized(mel_batch, img_batch).numpy()
+
+                    print(prof.key_averages().table(sort_by="cpu_time_total"))
+
+                    with profile(
+                            activities=[
+                                ProfilerActivity.CPU,
+                            ],
+                            on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                            record_shapes=True,
+                            profile_memory=True,
+                            with_stack=False
+                    ) as prof:
+                        for x in range(1):
+                            # record_function
+                            inference_pipline.model(mel_batch, img_batch).numpy()
+                    #
+                    print(prof.key_averages().table(sort_by="cpu_time_total"))
                     start_time = time()
                     pred = inference_pipline.model_quantized(mel_batch, img_batch).numpy()
                     fin_time = (time() - start_time)
