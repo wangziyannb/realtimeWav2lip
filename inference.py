@@ -3,6 +3,8 @@ import math
 import os
 import wave
 
+from basicsr.archs.rrdbnet_arch import RRDBNet
+from basicsr.utils.download_util import load_file_from_url
 # import platform
 # import subprocess
 from torch.profiler import profile, record_function, ProfilerActivity
@@ -37,11 +39,15 @@ from PIL import Image, ImageTk
 
 from models.conv import Conv2d, nonorm_Conv2d, Conv2dTranspose
 from models.wav2lip import QuantizedWav2Lip
+from realesrgan import RealESRGANer
 
 parser = argparse.ArgumentParser(description='Inference code to lip-sync videos in the wild using Wav2Lip models')
 
 parser.add_argument('--checkpoint_path', type=str, default="./checkpoints/wav2lip_gan.pth",
                     help='Name of saved checkpoint to load weights from', required=False)
+
+parser.add_argument('--sr_path', type=str, default="./checkpoints/RealESRGAN_x4plus.pth",
+                    help='Name of saved checkpoint to load super resolution weights from', required=False)
 
 parser.add_argument('--face', type=str, default="Elon_Musk.jpg",
                     help='Filepath of video/image that contains faces to use', required=False)
@@ -81,12 +87,20 @@ parser.add_argument('--rotate', default=False, action='store_true',
 parser.add_argument('--nosmooth', default=False, action='store_true',
                     help='Prevent smoothing face detections over a short temporal window')
 
+parser.add_argument('-t', '--tile', type=int, default=0, help='Tile size, 0 for no tile during testing')
+parser.add_argument('--tile_pad', type=int, default=10, help='Tile padding')
+parser.add_argument('--pre_pad', type=int, default=0, help='Pre padding size at each border')
+parser.add_argument(
+    '--fp32', action='store_true', help='Use fp32 precision during inference. Default: fp16 (half precision).')
+parser.add_argument(
+    '-g', '--gpu-id', type=int, default=None, help='gpu device to use (default=None) can be 0,1,2 for multi-gpu')
+parser.add_argument('-s', '--outscale', type=float, default=3.5, help='The final upsampling scale of the image')
 
 class Wav2LipInference:
 
     def __init__(self, args) -> None:
 
-        self.CHUNK = 1024+2048+4096  # piece of audio data, no of frames per buffer during audio capture, large chunk size reduces computational overhead but may add latency and vise versa
+        self.CHUNK = 1024  # piece of audio data, no of frames per buffer during audio capture, large chunk size reduces computational overhead but may add latency and vise versa
         self.FORMAT = pyaudio.paInt16
         self.CHANNELS = 1  # no of audio channels, 1 means monaural audio
         self.RATE = 16000  # sample rate of the audio stream, 16000 samples/second
@@ -98,8 +112,8 @@ class Wav2LipInference:
         self.args = args
 
         print('Using {} for inference.'.format(self.device))
-        # torch.backends.quantized.engine = 'x86'
-        torch.backends.quantized.engine = 'qnnpack'
+        torch.backends.quantized.engine = 'x86'
+        # torch.backends.quantized.engine = 'qnnpack'
         self.model = self.load_model()
         self.FIDModel = inception_v3(pretrained=True, transform_input=False)
         self.FIDModel.fc = torch.nn.Identity()
@@ -148,13 +162,49 @@ class Wav2LipInference:
         self.model_prepared = torch.quantization.prepare(self.model)
         self.model_quantized = None
         self.detector = self.load_batch_face_model()
-
+        self.sr_model=self.load_realesrgan()
         self.face_detect_cache_result = None
         self.img_tk = None
         self.total_img_batch = []
         self.total_mel_batch = []
         self.pred = []
         self.pred_q = []
+
+    def load_realesrgan(self):
+        model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+        netscale = 4
+        file_url = ['https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth']
+        if self.args.sr_path is not None:
+            model_path = self.args.sr_path
+        else:
+            model_path = os.path.join('weights', 'RealESRGAN_x4plus.pth')
+            if not os.path.isfile(model_path):
+                ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+                for url in file_url:
+                    # model_path will be updated
+                    model_path = load_file_from_url(
+                        url=url, model_dir=os.path.join(ROOT_DIR, 'weights'), progress=True, file_name=None)
+        dni_weight = None
+        upsampler = RealESRGANer(
+            scale=netscale,
+            model_path=model_path,
+            dni_weight=dni_weight,
+            model=model,
+            tile=self.args.tile,
+            tile_pad=self.args.tile_pad,
+            pre_pad=self.args.pre_pad,
+            half=not self.args.fp32,
+            gpu_id=0)
+
+        # if self.args.face_enhance:  # Use GFPGAN for face enhancement
+        from gfpgan import GFPGANer
+        face_enhancer = GFPGANer(
+            model_path='https://github.com/TencentARC/GFPGAN/releases/download/v1.3.0/GFPGANv1.3.pth',
+            upscale=self.args.outscale,
+            arch='clean',
+            channel_multiplier=2,
+            bg_upsampler=upsampler)
+        return face_enhancer
 
     def load_wav2lip_openvino_model(self):
         '''
@@ -247,7 +297,8 @@ class Wav2LipInference:
         #             #     )
         # # model = QuantizedWav2Lip(model)
         # model.qconfig = torch.quantization.get_default_qconfig('x86')
-        model.qconfig = torch.quantization.get_default_qconfig('qnnpack')
+        # model.qconfig = torch.quantization.get_default_qconfig('qnnpack')
+        model.qconfig = torch.quantization.get_default_qconfig('x86')
         model = model.to(self.device)
         return model
 
@@ -535,10 +586,10 @@ def update_frames(full_frames, stream, inference_pipline):
                     #         inference_pipline.model(mel_batch, img_batch).numpy()
                     #
                     # print(prof.key_averages().table(sort_by="cpu_time_total"))
-                    start_time = time()
-                    pred_quant = inference_pipline.model_quantized(mel_batch, img_batch).numpy()
-                    fin_time = (time() - start_time)
-                    print(f"Quantized model inference time: {fin_time:.6f} seconds")
+                    # start_time = time()
+                    # pred_quant = inference_pipline.model_quantized(mel_batch, img_batch).numpy()
+                    # fin_time = (time() - start_time)
+                    # print(f"Quantized model inference time: {fin_time:.6f} seconds")
 
                     start_time = time()
                     pred = inference_pipline.model(mel_batch, img_batch).numpy()
@@ -644,12 +695,13 @@ def update_frames(full_frames, stream, inference_pipline):
 
             # Convert frame to RGB format
             # frame_rgb = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
-
+            a, b, output = inference_pipline.sr_model.enhance(f, has_aligned=False, only_center_face=False, paste_back=True)
             # Encode the image to base64
-            _, buffer = cv2.imencode('.jpg', f)
+            _, buffer = cv2.imencode('.jpg', output)
             buffer = np.array(buffer)
             buffer = buffer.tobytes()
 
+            print()
             return (b'--frame\r\n'
                     b'Content-Type: image/jpeg\r\n\r\n' + buffer + b'\r\n')
 
