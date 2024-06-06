@@ -96,6 +96,7 @@ parser.add_argument(
     '-g', '--gpu-id', type=int, default=None, help='gpu device to use (default=None) can be 0,1,2 for multi-gpu')
 parser.add_argument('-s', '--outscale', type=float, default=3.5, help='The final upsampling scale of the image')
 
+
 class Wav2LipInference:
 
     def __init__(self, args) -> None:
@@ -162,7 +163,7 @@ class Wav2LipInference:
         self.model_prepared = torch.quantization.prepare(self.model)
         self.model_quantized = None
         self.detector = self.load_batch_face_model()
-        self.sr_model=self.load_realesrgan()
+        self.sr_model = self.load_realesrgan()
         self.face_detect_cache_result = None
         self.img_tk = None
         self.total_img_batch = []
@@ -194,8 +195,8 @@ class Wav2LipInference:
             tile_pad=self.args.tile_pad,
             pre_pad=self.args.pre_pad,
             half=not self.args.fp32,
-            gpu_id=0)
-
+            device=self.device)
+            # device='cuda')
         # if self.args.face_enhance:  # Use GFPGAN for face enhancement
         from gfpgan import GFPGANer
         face_enhancer = GFPGANer(
@@ -203,7 +204,9 @@ class Wav2LipInference:
             upscale=self.args.outscale,
             arch='clean',
             channel_multiplier=2,
-            bg_upsampler=upsampler)
+            bg_upsampler=upsampler,
+            device=self.device)
+            # device='cuda')
         return face_enhancer
 
     def load_wav2lip_openvino_model(self):
@@ -273,6 +276,7 @@ class Wav2LipInference:
                                                                     f'{idx}.conv_block.1',
                                                                     f'{idx}.act'
                                                                     ], inplace=True)
+        face_encoder.qconfig = None
         face_decoder.qconfig = None
         output_block.qconfig = None
         # for m in model.modules():
@@ -353,7 +357,7 @@ class Wav2LipInference:
         # Example:
         wav = audio_data
         mel = audio.melspectrogram(wav)
-        print(mel.shape, time() - stime)
+        # print(mel.shape, time() - stime)
 
         # convert to mel chunks
         if np.isnan(mel.reshape(-1)).sum() > 0:
@@ -373,7 +377,7 @@ class Wav2LipInference:
             i += 1
 
         print("Length of mel chunks: {}".format(len(mel_chunks)))
-        print(time() - stime)
+        # print(time() - stime)
 
         return mel_chunks
 
@@ -499,161 +503,161 @@ def update_frames(full_frames, stream, inference_pipline):
             inference_pipline.total_img_batch.append(img_batch)
             inference_pipline.total_mel_batch.append(mel_batch)
             with torch.no_grad():
-                if inference_pipline.model_quantized is None and len(inference_pipline.total_mel_batch) == 1:
-                    def calibrate(model, data_loader):
-                        model.eval()
-                        with torch.no_grad():
-                            for data in data_loader:
-                                model(data[0], data[1])
+                # if inference_pipline.model_quantized is None and len(inference_pipline.total_mel_batch) == 1:
+                #     def calibrate(model, data_loader):
+                #         model.eval()
+                #         with torch.no_grad():
+                #             for data in data_loader:
+                #                 model(data[0], data[1])
+                #
+                #     # calibration_loader = [(inference_pipline.total_mel_batch, inference_pipline.total_img_batch)]
+                #     calibration_loader = []
+                #     for i in range(len(inference_pipline.total_mel_batch)):
+                #         calibration_loader.append(
+                #             (inference_pipline.total_mel_batch[i], inference_pipline.total_img_batch[i]))
+                #     # calibration_loader = [(inference_pipline.total_mel_batch, inference_pipline.total_img_batch)]
+                #     calibrate(inference_pipline.model_prepared, calibration_loader)
+                #
+                #     model_quantized = torch.quantization.convert(inference_pipline.model_prepared)
+                #
+                #     inference_pipline.model_quantized = model_quantized
+                #     start_time = time()
+                #     pred = inference_pipline.model_quantized(mel_batch, img_batch).numpy()
+                #     fin_time = (time() - start_time)
 
-                    # calibration_loader = [(inference_pipline.total_mel_batch, inference_pipline.total_img_batch)]
-                    calibration_loader = []
-                    for i in range(len(inference_pipline.total_mel_batch)):
-                        calibration_loader.append(
-                            (inference_pipline.total_mel_batch[i], inference_pipline.total_img_batch[i]))
-                    # calibration_loader = [(inference_pipline.total_mel_batch, inference_pipline.total_img_batch)]
-                    calibrate(inference_pipline.model_prepared, calibration_loader)
+                # print(f"Quantized model inference time: {fin_time:.6f} seconds")
 
-                    model_quantized = torch.quantization.convert(inference_pipline.model_prepared)
+                # traced_model = torch.jit.trace(model_quantized, (mel_batch, img_batch))
+                # torch.jit.save(traced_model, "quantized_model.pth")
+                # traced_model = torch.jit.trace(inference_pipline.model, (mel_batch, img_batch))
+                # torch.jit.save(traced_model, "origin_model.pth")
+                # with profile(
+                #         activities=[
+                #             ProfilerActivity.CPU,
+                #         ],
+                #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                #         record_shapes=True,
+                #         profile_memory=True,
+                #         with_stack=False
+                # ) as prof:
+                #     for x in range(1):
+                #         # record_function
+                #         inference_pipline.model_quantized(mel_batch, img_batch).numpy()
+                #
+                # print(prof.key_averages().table(sort_by="cpu_time_total"))
+                #
+                # with profile(
+                #         activities=[
+                #             ProfilerActivity.CPU,
+                #         ],
+                #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                #         record_shapes=True,
+                #         profile_memory=True,
+                #         with_stack=False
+                # ) as prof:
+                #     for x in range(1):
+                #         # record_function
+                #         inference_pipline.model(mel_batch, img_batch).numpy()
 
-                    inference_pipline.model_quantized = model_quantized
-                    start_time = time()
-                    pred = inference_pipline.model_quantized(mel_batch, img_batch).numpy()
-                    fin_time = (time() - start_time)
+                # print(prof.key_averages().table(sort_by="cpu_time_total"))
+                # elif inference_pipline.model_quantized is not None:
+                #     # with profile(
+                #     #         activities=[
+                #     #             ProfilerActivity.CPU,
+                #     #         ],
+                #     #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                #     #         record_shapes=True,
+                #     #         profile_memory=True,
+                #     #         with_stack=False
+                #     # ) as prof:
+                #     #     for x in range(1):
+                #     #         # record_function
+                #     #         inference_pipline.model_quantized(mel_batch, img_batch).numpy()
+                #     #
+                #     # print(prof.key_averages().table(sort_by="cpu_time_total"))
+                #     #
+                #     # with profile(
+                #     #         activities=[
+                #     #             ProfilerActivity.CPU,
+                #     #         ],
+                #     #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                #     #         record_shapes=True,
+                #     #         profile_memory=True,
+                #     #         with_stack=False
+                #     # ) as prof:
+                #     #     for x in range(1):
+                #     #         # record_function
+                #     #         inference_pipline.model(mel_batch, img_batch).numpy()
+                #     #
+                #     # print(prof.key_averages().table(sort_by="cpu_time_total"))
+                #     # start_time = time()
+                #     # pred_quant = inference_pipline.model_quantized(mel_batch, img_batch).numpy()
+                #     # fin_time = (time() - start_time)
+                #     # print(f"Quantized model inference time: {fin_time:.6f} seconds")
+                #
+                #     start_time = time()
+                #     pred = inference_pipline.model(mel_batch, img_batch).numpy()
+                #     fin_time = (time() - start_time)
+                #     print(f"CPU model inference time: {fin_time:.6f} seconds")
+                #
+                # else:
+                start_time = time()
+                pred = inference_pipline.model(mel_batch, img_batch).numpy()
+                fin_time = (time() - start_time)
+                print(f"CPU wave2lip model inference time: {fin_time:.6f} seconds")
+                # with profile(
+                #         activities=[
+                #             ProfilerActivity.CPU,
+                #         ],
+                #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                #         record_shapes=True,
+                #         profile_memory=True,
+                #         with_stack=False
+                # ) as prof:
+                #     for x in range(1):
+                #         # record_function
+                #         model_quantized(mel_batch, img_batch).numpy()
+                #
+                # print(prof.key_averages().table(sort_by="cpu_time_total"))
+                #
+                # with profile(
+                #         activities=[
+                #             ProfilerActivity.CPU,
+                #         ],
+                #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                #         record_shapes=True,
+                #         profile_memory=True,
+                #         with_stack=False
+                # ) as prof:
+                #     for x in range(1):
+                #         # record_function
+                #         inference_pipline.model(mel_batch, img_batch).numpy()
+                # #
+                # print(prof.key_averages().table(sort_by="cpu_time_total"))
+            # img_batch, mel_batch = np.random.rand(128, 6, 96, 96), np.random.rand(128, 1, 80, 16)
+            # img_batch = torch.FloatTensor(img_batch)
+            # mel_batch = torch.FloatTensor(mel_batch)
+            # torch.onnx.export(model_quantized,
+            #                   (mel_batch, img_batch),
+            #                   'model_quantized.onnx',
+            #                   input_names=["audio_sequences", "face_sequences"],
+            #                   output_names=["output"],
+            #                   dynamic_axes={"audio_sequences": {0: "batch_size", 1: "time_size"},
+            #                                 "face_sequences": {0: "batch_size", 1: "channel"}},
+            #                   )
 
-                    print(f"Quantized model inference time: {fin_time:.6f} seconds")
+            # start_time = time()
+            # for _ in range(10):  # 运行多次以获得平均时间
+            #     _ = inference_pipline.model(mel_batch, img_batch).numpy()
+            # orig_time = (time() - start_time) / 10
+            # print(f"Original model inference time: {orig_time:.6f} seconds")
 
-                    traced_model = torch.jit.trace(model_quantized, (mel_batch, img_batch))
-                    torch.jit.save(traced_model, "quantized_model.pth")
-                    traced_model = torch.jit.trace(inference_pipline.model, (mel_batch, img_batch))
-                    torch.jit.save(traced_model, "origin_model.pth")
-                    with profile(
-                            activities=[
-                                ProfilerActivity.CPU,
-                            ],
-                            on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
-                            record_shapes=True,
-                            profile_memory=True,
-                            with_stack=False
-                    ) as prof:
-                        for x in range(1):
-                            # record_function
-                            inference_pipline.model_quantized(mel_batch, img_batch).numpy()
-
-                    print(prof.key_averages().table(sort_by="cpu_time_total"))
-
-                    with profile(
-                            activities=[
-                                ProfilerActivity.CPU,
-                            ],
-                            on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
-                            record_shapes=True,
-                            profile_memory=True,
-                            with_stack=False
-                    ) as prof:
-                        for x in range(1):
-                            # record_function
-                            inference_pipline.model(mel_batch, img_batch).numpy()
-
-                    print(prof.key_averages().table(sort_by="cpu_time_total"))
-                elif inference_pipline.model_quantized is not None:
-                    # with profile(
-                    #         activities=[
-                    #             ProfilerActivity.CPU,
-                    #         ],
-                    #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
-                    #         record_shapes=True,
-                    #         profile_memory=True,
-                    #         with_stack=False
-                    # ) as prof:
-                    #     for x in range(1):
-                    #         # record_function
-                    #         inference_pipline.model_quantized(mel_batch, img_batch).numpy()
-                    #
-                    # print(prof.key_averages().table(sort_by="cpu_time_total"))
-                    #
-                    # with profile(
-                    #         activities=[
-                    #             ProfilerActivity.CPU,
-                    #         ],
-                    #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
-                    #         record_shapes=True,
-                    #         profile_memory=True,
-                    #         with_stack=False
-                    # ) as prof:
-                    #     for x in range(1):
-                    #         # record_function
-                    #         inference_pipline.model(mel_batch, img_batch).numpy()
-                    #
-                    # print(prof.key_averages().table(sort_by="cpu_time_total"))
-                    # start_time = time()
-                    # pred_quant = inference_pipline.model_quantized(mel_batch, img_batch).numpy()
-                    # fin_time = (time() - start_time)
-                    # print(f"Quantized model inference time: {fin_time:.6f} seconds")
-
-                    start_time = time()
-                    pred = inference_pipline.model(mel_batch, img_batch).numpy()
-                    fin_time = (time() - start_time)
-                    print(f"CPU model inference time: {fin_time:.6f} seconds")
-
-                else:
-                    start_time = time()
-                    pred = inference_pipline.model(mel_batch, img_batch).numpy()
-                    fin_time = (time() - start_time)
-                    print(f"CPU model inference time: {fin_time:.6f} seconds")
-                    # with profile(
-                    #         activities=[
-                    #             ProfilerActivity.CPU,
-                    #         ],
-                    #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
-                    #         record_shapes=True,
-                    #         profile_memory=True,
-                    #         with_stack=False
-                    # ) as prof:
-                    #     for x in range(1):
-                    #         # record_function
-                    #         model_quantized(mel_batch, img_batch).numpy()
-                    #
-                    # print(prof.key_averages().table(sort_by="cpu_time_total"))
-                    #
-                    # with profile(
-                    #         activities=[
-                    #             ProfilerActivity.CPU,
-                    #         ],
-                    #         on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
-                    #         record_shapes=True,
-                    #         profile_memory=True,
-                    #         with_stack=False
-                    # ) as prof:
-                    #     for x in range(1):
-                    #         # record_function
-                    #         inference_pipline.model(mel_batch, img_batch).numpy()
-                    # #
-                    # print(prof.key_averages().table(sort_by="cpu_time_total"))
-                # img_batch, mel_batch = np.random.rand(128, 6, 96, 96), np.random.rand(128, 1, 80, 16)
-                # img_batch = torch.FloatTensor(img_batch)
-                # mel_batch = torch.FloatTensor(mel_batch)
-                # torch.onnx.export(model_quantized,
-                #                   (mel_batch, img_batch),
-                #                   'model_quantized.onnx',
-                #                   input_names=["audio_sequences", "face_sequences"],
-                #                   output_names=["output"],
-                #                   dynamic_axes={"audio_sequences": {0: "batch_size", 1: "time_size"},
-                #                                 "face_sequences": {0: "batch_size", 1: "channel"}},
-                #                   )
-
-                # start_time = time()
-                # for _ in range(10):  # 运行多次以获得平均时间
-                #     _ = inference_pipline.model(mel_batch, img_batch).numpy()
-                # orig_time = (time() - start_time) / 10
-                # print(f"Original model inference time: {orig_time:.6f} seconds")
-
-                # # 测量量化模型的推理时间
-                # start_time = time()
-                # for _ in range(10):  # 运行多次以获得平均时间
-                #     _ =
-                # quant_time = (time() - start_time) / 10
-                # print(f"Quantized model inference time: {quant_time:.6f} seconds")
+            # # 测量量化模型的推理时间
+            # start_time = time()
+            # for _ in range(10):  # 运行多次以获得平均时间
+            #     _ =
+            # quant_time = (time() - start_time) / 10
+            # print(f"Quantized model inference time: {quant_time:.6f} seconds")
 
             # start_time = time()
             # img_batch = np.transpose(img_batch, (0, 3, 1, 2))
@@ -666,11 +670,10 @@ def update_frames(full_frames, stream, inference_pipline):
             start_time = time()
             img_batch = torch.FloatTensor(np.transpose(img_batch, (0, 3, 1, 2))).to(inference_pipline.device)
             mel_batch = torch.FloatTensor(np.transpose(mel_batch, (0, 3, 1, 2))).to(inference_pipline.device)
-            print(img_batch.shape, mel_batch.shape)
             with torch.no_grad():
                 pred = inference_pipline.model(mel_batch, img_batch).cpu().numpy()
             fin_time = (time() - start_time)
-            print(f"GPU model inference time: {fin_time:.6f} seconds")
+            print(f"GPU wave2lip model inference time: {fin_time:.6f} seconds")
 
         if pred_quant is not None:
             pred_quant = pred_quant.transpose(0, 2, 3, 1) * 255.
@@ -695,13 +698,16 @@ def update_frames(full_frames, stream, inference_pipline):
 
             # Convert frame to RGB format
             # frame_rgb = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
-            a, b, output = inference_pipline.sr_model.enhance(f, has_aligned=False, only_center_face=False, paste_back=True)
+            start_time = time()
+            a, b, output = inference_pipline.sr_model.enhance(f, has_aligned=False, only_center_face=False,
+                                                              paste_back=True)
+            fin_time = (time() - start_time)
+            print(f"CPU Real-ESRGAN/GFPGAN model inference time: {fin_time:.6f} seconds")
             # Encode the image to base64
             _, buffer = cv2.imencode('.jpg', output)
             buffer = np.array(buffer)
             buffer = buffer.tobytes()
 
-            print()
             return (b'--frame\r\n'
                     b'Content-Type: image/jpeg\r\n\r\n' + buffer + b'\r\n')
 
@@ -775,4 +781,9 @@ def main(imagefilepath, flag):
             p.terminate()
             return b""
         print(f"Model inference flag {flag}")
+
+        start_time = time()
         yield update_frames(full_frames, stream, inference_pipline)
+        fin_time = (time() - start_time)
+        print(f"Total time for one chunk prediction: {fin_time:.6f} seconds")
+        print()
