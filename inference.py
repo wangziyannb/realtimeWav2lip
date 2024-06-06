@@ -86,7 +86,7 @@ class Wav2LipInference:
 
     def __init__(self, args) -> None:
 
-        self.CHUNK = 1024  # piece of audio data, no of frames per buffer during audio capture, large chunk size reduces computational overhead but may add latency and vise versa
+        self.CHUNK = 1024+2048+4096  # piece of audio data, no of frames per buffer during audio capture, large chunk size reduces computational overhead but may add latency and vise versa
         self.FORMAT = pyaudio.paInt16
         self.CHANNELS = 1  # no of audio channels, 1 means monaural audio
         self.RATE = 16000  # sample rate of the audio stream, 16000 samples/second
@@ -98,7 +98,8 @@ class Wav2LipInference:
         self.args = args
 
         print('Using {} for inference.'.format(self.device))
-        torch.backends.quantized.engine = 'x86'
+        # torch.backends.quantized.engine = 'x86'
+        torch.backends.quantized.engine = 'qnnpack'
         self.model = self.load_model()
         self.FIDModel = inception_v3(pretrained=True, transform_input=False)
         self.FIDModel.fc = torch.nn.Identity()
@@ -245,8 +246,8 @@ class Wav2LipInference:
         #             #         weight=ao.quantization.default_weight_observer
         #             #     )
         # # model = QuantizedWav2Lip(model)
-        model.qconfig = torch.quantization.get_default_qconfig('x86')
-
+        # model.qconfig = torch.quantization.get_default_qconfig('x86')
+        model.qconfig = torch.quantization.get_default_qconfig('qnnpack')
         model = model.to(self.device)
         return model
 
@@ -447,7 +448,7 @@ def update_frames(full_frames, stream, inference_pipline):
             inference_pipline.total_img_batch.append(img_batch)
             inference_pipline.total_mel_batch.append(mel_batch)
             with torch.no_grad():
-                if inference_pipline.model_quantized is None and len(inference_pipline.total_mel_batch) == 10:
+                if inference_pipline.model_quantized is None and len(inference_pipline.total_mel_batch) == 1:
                     def calibrate(model, data_loader):
                         model.eval()
                         with torch.no_grad():
@@ -473,7 +474,37 @@ def update_frames(full_frames, stream, inference_pipline):
 
                     traced_model = torch.jit.trace(model_quantized, (mel_batch, img_batch))
                     torch.jit.save(traced_model, "quantized_model.pth")
+                    traced_model = torch.jit.trace(inference_pipline.model, (mel_batch, img_batch))
+                    torch.jit.save(traced_model, "origin_model.pth")
+                    with profile(
+                            activities=[
+                                ProfilerActivity.CPU,
+                            ],
+                            on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                            record_shapes=True,
+                            profile_memory=True,
+                            with_stack=False
+                    ) as prof:
+                        for x in range(1):
+                            # record_function
+                            inference_pipline.model_quantized(mel_batch, img_batch).numpy()
 
+                    print(prof.key_averages().table(sort_by="cpu_time_total"))
+
+                    with profile(
+                            activities=[
+                                ProfilerActivity.CPU,
+                            ],
+                            on_trace_ready=torch.profiler.tensorboard_trace_handler('./log'),
+                            record_shapes=True,
+                            profile_memory=True,
+                            with_stack=False
+                    ) as prof:
+                        for x in range(1):
+                            # record_function
+                            inference_pipline.model(mel_batch, img_batch).numpy()
+
+                    print(prof.key_averages().table(sort_by="cpu_time_total"))
                 elif inference_pipline.model_quantized is not None:
                     # with profile(
                     #         activities=[
