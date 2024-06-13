@@ -46,8 +46,6 @@ parser = argparse.ArgumentParser(description='Inference code to lip-sync videos 
 parser.add_argument('--checkpoint_path', type=str, default="./checkpoints/wav2lip_gan.pth",
                     help='Name of saved checkpoint to load weights from', required=False)
 
-parser.add_argument('--sr_path', type=str, default="./checkpoints/RealESRGAN_x4plus.pth",
-                    help='Name of saved checkpoint to load super resolution weights from', required=False)
 
 parser.add_argument('--face', type=str, default="Elon_Musk.jpg",
                     help='Filepath of video/image that contains faces to use', required=False)
@@ -95,13 +93,17 @@ parser.add_argument(
 parser.add_argument(
     '-g', '--gpu-id', type=int, default=None, help='gpu device to use (default=None) can be 0,1,2 for multi-gpu')
 parser.add_argument('-s', '--outscale', type=float, default=3.5, help='The final upsampling scale of the image')
-
+# parser.add_argument('--sr_path', type=str, default="./checkpoints/RealESRGAN_x4plus.pth",
+#                     help='Name of saved checkpoint to load super resolution weights from', required=False)
+parser.add_argument('--sr_path', type=str, default="./checkpoints/RealESRGAN_x4plus.pth",
+                    help='Name of saved checkpoint to load super resolution weights from', required=False)
 
 class Wav2LipInference:
 
     def __init__(self, args) -> None:
 
-        self.CHUNK = 1024  # piece of audio data, no of frames per buffer during audio capture, large chunk size reduces computational overhead but may add latency and vise versa
+        # self.CHUNK = 1024  # piece of audio data, no of frames per buffer during audio capture, large chunk size reduces computational overhead but may add latency and vise versa
+        self.CHUNK = 1024+2048+4096
         self.FORMAT = pyaudio.paInt16
         self.CHANNELS = 1  # no of audio channels, 1 means monaural audio
         self.RATE = 16000  # sample rate of the audio stream, 16000 samples/second
@@ -113,8 +115,8 @@ class Wav2LipInference:
         self.args = args
 
         print('Using {} for inference.'.format(self.device))
-        torch.backends.quantized.engine = 'x86'
-        # torch.backends.quantized.engine = 'qnnpack'
+        # torch.backends.quantized.engine = 'x86'
+        torch.backends.quantized.engine = 'qnnpack'
         self.model = self.load_model()
         self.FIDModel = inception_v3(pretrained=True, transform_input=False)
         self.FIDModel.fc = torch.nn.Identity()
@@ -175,6 +177,11 @@ class Wav2LipInference:
         model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
         netscale = 4
         file_url = ['https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth']
+        #
+        # model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=2)
+        # netscale = 2
+        # file_url = ['https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth']
+
         if self.args.sr_path is not None:
             model_path = self.args.sr_path
         else:
@@ -194,9 +201,10 @@ class Wav2LipInference:
             tile=self.args.tile,
             tile_pad=self.args.tile_pad,
             pre_pad=self.args.pre_pad,
-            half=not self.args.fp32,
+            half=False,
             device=self.device)
             # device='cuda')
+            # device='mps')
         # if self.args.face_enhance:  # Use GFPGAN for face enhancement
         from gfpgan import GFPGANer
         face_enhancer = GFPGANer(
@@ -207,6 +215,7 @@ class Wav2LipInference:
             bg_upsampler=upsampler,
             device=self.device)
             # device='cuda')
+            # device='mps')
         return face_enhancer
 
     def load_wav2lip_openvino_model(self):
@@ -300,9 +309,8 @@ class Wav2LipInference:
         #             #         weight=ao.quantization.default_weight_observer
         #             #     )
         # # model = QuantizedWav2Lip(model)
+        model.qconfig = torch.quantization.get_default_qconfig('qnnpack')
         # model.qconfig = torch.quantization.get_default_qconfig('x86')
-        # model.qconfig = torch.quantization.get_default_qconfig('qnnpack')
-        model.qconfig = torch.quantization.get_default_qconfig('x86')
         model = model.to(self.device)
         return model
 
@@ -702,7 +710,7 @@ def update_frames(full_frames, stream, inference_pipline):
             a, b, output = inference_pipline.sr_model.enhance(f, has_aligned=False, only_center_face=False,
                                                               paste_back=True)
             fin_time = (time() - start_time)
-            print(f"CPU Real-ESRGAN/GFPGAN model inference time: {fin_time:.6f} seconds")
+            print(f"CPU Real-ESRGAN & GFPGAN model inference time: {fin_time:.6f} seconds")
             # Encode the image to base64
             _, buffer = cv2.imencode('.jpg', output)
             buffer = np.array(buffer)

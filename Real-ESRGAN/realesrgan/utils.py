@@ -112,6 +112,10 @@ class RealESRGANer():
 
     def process(self):
         # model inference
+        # traced_model = torch.jit.script(self.model)
+        # torch.jit.save(traced_model, "realesrgan.pth")
+        traced_model = torch.jit.trace(self.model, (self.img))
+        torch.jit.save(traced_model, "realesrgan_trace_2x.pth")
         self.output = self.model(self.img)
 
     def tile_process(self):
