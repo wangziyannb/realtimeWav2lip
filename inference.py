@@ -120,48 +120,7 @@ class Wav2LipInference:
         self.model = self.load_model()
         self.FIDModel = inception_v3(pretrained=True, transform_input=False)
         self.FIDModel.fc = torch.nn.Identity()
-        #
 
-        # torch.backends.quantized.engine = 'qnnpack'
-
-        # self.model.qconfig = torch.quantization.get_default_qconfig('qnnpack')
-        # def fuse_model(model):
-        #     for m in model.modules():
-        #         if isinstance(m, nn.Sequential):
-        #             for idx in range(len(m)):
-        #                 if isinstance(m[idx], Conv2d):
-        #                     if m[idx].residual:
-        #                         torch.quantization.fuse_modules(m, [f'{idx}.conv_block.0',
-        #                                                             f'{idx}.conv_block.1',
-        #                                                             # f'{idx}.act'
-        #                                                             ], inplace=True)
-        #                     else:
-        #                         torch.quantization.fuse_modules(m, [f'{idx}.conv_block.0',
-        #                                                             f'{idx}.conv_block.1',
-        #                                                             f'{idx}.act'
-        #                                                             ], inplace=True)
-        #
-        #                     m[idx].qconfig = ao.quantization.qconfig.QConfig(
-        #                         activation=ao.quantization.observer.MinMaxObserver,
-        #                         # activation=default_fake_quant,
-        #                         # weight=default_weight_fake_quant
-        #                         weight=ao.quantization.observer.MinMaxObserver.with_args(
-        #                             dtype=torch.torch.qint8, qscheme=torch.per_tensor_affine)
-        #                     )
-        #                 if isinstance(m[idx], Conv2dTranspose):
-        #                     m[idx].qconfig = ao.quantization.qconfig.QConfig(
-        #                         activation=ao.quantization.observer.MinMaxObserver,
-        #                         # activation=default_fake_quant,
-        #                         # weight=default_weight_fake_quant
-        #                         weight=ao.quantization.observer.MinMaxObserver.with_args(
-        #                             dtype=torch.torch.qint8, qscheme=torch.per_tensor_affine)
-        #                     )
-        #
-        # #                 # torch.quantization.fuse_modules(m, [f'{idx}.conv_block.0', f'{idx}.conv_block.1',
-        # #                 #                                     f'{idx}.act'], inplace=True)
-        # #
-        # fuse_model(self.model)
-        # self.model.output_block.qconfig = None
         self.model_prepared = torch.quantization.prepare(self.model)
         self.model_quantized = None
         self.detector = self.load_batch_face_model()
@@ -202,9 +161,9 @@ class Wav2LipInference:
             tile_pad=self.args.tile_pad,
             pre_pad=self.args.pre_pad,
             half=False,
-            device=self.device)
+            # device=self.device)
             # device='cuda')
-            # device='mps')
+            device='mps')
         # if self.args.face_enhance:  # Use GFPGAN for face enhancement
         from gfpgan import GFPGANer
         face_enhancer = GFPGANer(
@@ -285,7 +244,7 @@ class Wav2LipInference:
                                                                     f'{idx}.conv_block.1',
                                                                     f'{idx}.act'
                                                                     ], inplace=True)
-        face_encoder.qconfig = None
+        # face_encoder.qconfig = None
         face_decoder.qconfig = None
         output_block.qconfig = None
         # for m in model.modules():
@@ -511,34 +470,31 @@ def update_frames(full_frames, stream, inference_pipline):
             inference_pipline.total_img_batch.append(img_batch)
             inference_pipline.total_mel_batch.append(mel_batch)
             with torch.no_grad():
-                # if inference_pipline.model_quantized is None and len(inference_pipline.total_mel_batch) == 1:
-                #     def calibrate(model, data_loader):
-                #         model.eval()
-                #         with torch.no_grad():
-                #             for data in data_loader:
-                #                 model(data[0], data[1])
-                #
-                #     # calibration_loader = [(inference_pipline.total_mel_batch, inference_pipline.total_img_batch)]
-                #     calibration_loader = []
-                #     for i in range(len(inference_pipline.total_mel_batch)):
-                #         calibration_loader.append(
-                #             (inference_pipline.total_mel_batch[i], inference_pipline.total_img_batch[i]))
-                #     # calibration_loader = [(inference_pipline.total_mel_batch, inference_pipline.total_img_batch)]
-                #     calibrate(inference_pipline.model_prepared, calibration_loader)
-                #
-                #     model_quantized = torch.quantization.convert(inference_pipline.model_prepared)
-                #
-                #     inference_pipline.model_quantized = model_quantized
-                #     start_time = time()
-                #     pred = inference_pipline.model_quantized(mel_batch, img_batch).numpy()
-                #     fin_time = (time() - start_time)
+                if inference_pipline.model_quantized is None and len(inference_pipline.total_mel_batch) == 1:
+                    def calibrate(model, data_loader):
+                        model.eval()
+                        with torch.no_grad():
+                            for data in data_loader:
+                                model(data[0], data[1])
 
-                # print(f"Quantized model inference time: {fin_time:.6f} seconds")
+                    calibration_loader = []
+                    for i in range(len(inference_pipline.total_mel_batch)):
+                        calibration_loader.append(
+                            (inference_pipline.total_mel_batch[i], inference_pipline.total_img_batch[i]))
+                    calibrate(inference_pipline.model_prepared, calibration_loader)
 
-                # traced_model = torch.jit.trace(model_quantized, (mel_batch, img_batch))
-                # torch.jit.save(traced_model, "quantized_model.pth")
-                # traced_model = torch.jit.trace(inference_pipline.model, (mel_batch, img_batch))
-                # torch.jit.save(traced_model, "origin_model.pth")
+                    model_quantized = torch.quantization.convert(inference_pipline.model_prepared)
+
+                    inference_pipline.model_quantized = model_quantized
+                    start_time = time()
+                    pred = inference_pipline.model_quantized(mel_batch, img_batch).numpy()
+                    fin_time = (time() - start_time)
+                    print(f"Quantized model inference time: {fin_time:.6f} seconds")
+
+                    traced_model = torch.jit.trace(model_quantized, (mel_batch, img_batch))
+                    torch.jit.save(traced_model, "quantized_wave2lip_model.pth")
+                    traced_model = torch.jit.trace(inference_pipline.model, (mel_batch, img_batch))
+                    torch.jit.save(traced_model, "origin_wave2lip_model.pth")
                 # with profile(
                 #         activities=[
                 #             ProfilerActivity.CPU,
@@ -608,11 +564,11 @@ def update_frames(full_frames, stream, inference_pipline):
                 #     fin_time = (time() - start_time)
                 #     print(f"CPU model inference time: {fin_time:.6f} seconds")
                 #
-                # else:
-                start_time = time()
-                pred = inference_pipline.model(mel_batch, img_batch).numpy()
-                fin_time = (time() - start_time)
-                print(f"CPU wave2lip model inference time: {fin_time:.6f} seconds")
+                else:
+                    start_time = time()
+                    pred = inference_pipline.model(mel_batch, img_batch).numpy()
+                    fin_time = (time() - start_time)
+                    print(f"CPU wave2lip model inference time: {fin_time:.6f} seconds")
                 # with profile(
                 #         activities=[
                 #             ProfilerActivity.CPU,
@@ -642,35 +598,7 @@ def update_frames(full_frames, stream, inference_pipline):
                 #         inference_pipline.model(mel_batch, img_batch).numpy()
                 # #
                 # print(prof.key_averages().table(sort_by="cpu_time_total"))
-            # img_batch, mel_batch = np.random.rand(128, 6, 96, 96), np.random.rand(128, 1, 80, 16)
-            # img_batch = torch.FloatTensor(img_batch)
-            # mel_batch = torch.FloatTensor(mel_batch)
-            # torch.onnx.export(model_quantized,
-            #                   (mel_batch, img_batch),
-            #                   'model_quantized.onnx',
-            #                   input_names=["audio_sequences", "face_sequences"],
-            #                   output_names=["output"],
-            #                   dynamic_axes={"audio_sequences": {0: "batch_size", 1: "time_size"},
-            #                                 "face_sequences": {0: "batch_size", 1: "channel"}},
-            #                   )
 
-            # start_time = time()
-            # for _ in range(10):  # 运行多次以获得平均时间
-            #     _ = inference_pipline.model(mel_batch, img_batch).numpy()
-            # orig_time = (time() - start_time) / 10
-            # print(f"Original model inference time: {orig_time:.6f} seconds")
-
-            # # 测量量化模型的推理时间
-            # start_time = time()
-            # for _ in range(10):  # 运行多次以获得平均时间
-            #     _ =
-            # quant_time = (time() - start_time) / 10
-            # print(f"Quantized model inference time: {quant_time:.6f} seconds")
-
-            # start_time = time()
-            # img_batch = np.transpose(img_batch, (0, 3, 1, 2))
-            # mel_batch = np.transpose(mel_batch, (0, 3, 1, 2))
-            # print(img_batch.shape, mel_batch.shape)
             # pred = inference_pipline.model([mel_batch, img_batch])['output']
             # fin_time = (time() - start_time)
             # print(f"OpenVino model inference time: {fin_time:.6f} seconds")
@@ -777,7 +705,6 @@ def main(imagefilepath, flag):
                     channels=inference_pipline.CHANNELS,
                     rate=inference_pipline.RATE,
                     input=True,
-                    input_device_index=1,
                     frames_per_buffer=inference_pipline.CHUNK)
 
     inference_pipline.face_detect_cache_result = inference_pipline.face_detect([full_frames[0]])

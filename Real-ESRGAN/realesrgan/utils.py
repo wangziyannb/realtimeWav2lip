@@ -73,6 +73,7 @@ class RealESRGANer():
         self.model = model.to(self.device)
         if self.half:
             self.model = self.model.half()
+        self.trace = True
 
     def dni(self, net_a, net_b, dni_weight, key='params', loc='cpu'):
         """Deep network interpolation.
@@ -114,8 +115,10 @@ class RealESRGANer():
         # model inference
         # traced_model = torch.jit.script(self.model)
         # torch.jit.save(traced_model, "realesrgan.pth")
-        traced_model = torch.jit.trace(self.model, (self.img))
-        torch.jit.save(traced_model, "realesrgan_trace_2x.pth")
+        if self.trace:
+            traced_model = torch.jit.trace(self.model, self.img)
+            torch.jit.save(traced_model, f"realesrgan_trace_{self.scale}x.pth")
+            self.trace = False
         self.output = self.model(self.img)
 
     def tile_process(self):
@@ -180,8 +183,8 @@ class RealESRGANer():
 
                 # put tile into output image
                 self.output[:, :, output_start_y:output_end_y,
-                            output_start_x:output_end_x] = output_tile[:, :, output_start_y_tile:output_end_y_tile,
-                                                                       output_start_x_tile:output_end_x_tile]
+                output_start_x:output_end_x] = output_tile[:, :, output_start_y_tile:output_end_y_tile,
+                                               output_start_x_tile:output_end_x_tile]
 
     def post_process(self):
         # remove extra pad
