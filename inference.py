@@ -111,7 +111,7 @@ class Wav2LipInference:
         self.mel_step_size = 16  # mel freq step size
         self.audio_fs = 16000  # Sample rate
         # self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self.device = 'cpu'
+        self.device = 'mps'
         self.args = args
 
         print('Using {} for inference.'.format(self.device))
@@ -282,7 +282,7 @@ class Wav2LipInference:
 
     def load_batch_face_model(self):
 
-        if self.device == 'cpu':
+        if self.device in ['mps', 'cpu']:
             return RetinaFace(gpu_id=-1, model_path="checkpoints/mobilenet.pth", network="mobilenet")
         else:
             return RetinaFace(gpu_id=0, model_path="checkpoints/mobilenet.pth", network="mobilenet")
@@ -471,30 +471,30 @@ def update_frames(full_frames, stream, inference_pipline):
             inference_pipline.total_mel_batch.append(mel_batch)
             with torch.no_grad():
                 if inference_pipline.model_quantized is None and len(inference_pipline.total_mel_batch) == 1:
-                    def calibrate(model, data_loader):
-                        model.eval()
-                        with torch.no_grad():
-                            for data in data_loader:
-                                model(data[0], data[1])
+                    # def calibrate(model, data_loader):
+                    #     model.eval()
+                    #     with torch.no_grad():
+                    #         for data in data_loader:
+                    #             model(data[0], data[1])
+                    #
+                    # calibration_loader = []
+                    # for i in range(len(inference_pipline.total_mel_batch)):
+                    #     calibration_loader.append(
+                    #         (inference_pipline.total_mel_batch[i], inference_pipline.total_img_batch[i]))
+                    # calibrate(inference_pipline.model_prepared, calibration_loader)
 
-                    calibration_loader = []
-                    for i in range(len(inference_pipline.total_mel_batch)):
-                        calibration_loader.append(
-                            (inference_pipline.total_mel_batch[i], inference_pipline.total_img_batch[i]))
-                    calibrate(inference_pipline.model_prepared, calibration_loader)
-
-                    model_quantized = torch.quantization.convert(inference_pipline.model_prepared)
-
+                    # model_quantized = torch.quantization.convert(inference_pipline.model_prepared)
+                    model_quantized=inference_pipline.model_prepared
                     inference_pipline.model_quantized = model_quantized
                     start_time = time()
                     pred = inference_pipline.model_quantized(mel_batch, img_batch).numpy()
                     fin_time = (time() - start_time)
                     print(f"Quantized model inference time: {fin_time:.6f} seconds")
 
-                    traced_model = torch.jit.trace(model_quantized, (mel_batch, img_batch))
-                    torch.jit.save(traced_model, "quantized_wave2lip_model.pth")
-                    traced_model = torch.jit.trace(inference_pipline.model, (mel_batch, img_batch))
-                    torch.jit.save(traced_model, "origin_wave2lip_model.pth")
+                    # traced_model = torch.jit.trace(model_quantized, (mel_batch, img_batch))
+                    # torch.jit.save(traced_model, "quantized_wave2lip_model.pth")
+                    # traced_model = torch.jit.trace(inference_pipline.model, (mel_batch, img_batch))
+                    # torch.jit.save(traced_model, "origin_wave2lip_model.pth")
                 # with profile(
                 #         activities=[
                 #             ProfilerActivity.CPU,
@@ -635,8 +635,9 @@ def update_frames(full_frames, stream, inference_pipline):
             # Convert frame to RGB format
             # frame_rgb = cv2.cvtColor(f, cv2.COLOR_BGR2RGB)
             start_time = time()
-            a, b, output = inference_pipline.sr_model.enhance(f, has_aligned=False, only_center_face=False,
-                                                              paste_back=True)
+            # a, b, output = inference_pipline.sr_model.enhance(f, has_aligned=False, only_center_face=False,
+            #                                                   paste_back=True)
+            output = f
             fin_time = (time() - start_time)
             print(f"CPU Real-ESRGAN & GFPGAN model inference time: {fin_time:.6f} seconds")
             # Encode the image to base64
